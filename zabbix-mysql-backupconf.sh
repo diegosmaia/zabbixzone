@@ -1,71 +1,68 @@
 #!/bin/bash
 #
 # zabbix-mysql-backupconf.sh
-# v0.2 - 20111105
+# v0.5 - 20140203 - easier to upgrade (all and then exclude)
 #
-# Configuration Backup for Zabbix 1.8 w/MySQL
+# Configuration Backup for Zabbix 2.2 w/MySQL
 #
 # Author: Ricardo Santos (rsantos at gmail.com)
 # http://zabbixzone.com
 #
-# Thanks for suggestions from:
+# modified by Brendon Baumgartner, 2014
+#
+# Contribution and Suggestions from::
 # - Oleksiy Zagorskyi (zalex)
 # - Petr Jendrejovsky
+# - Jonathan Bayer
+# - Jens Berthold
+# - Brendon Baumgarter
 #
 
-# mysql config
-DBHOST="localhost"
+MYSQL="mysql"
 DBNAME="zabbix"
 DBUSER="zabbix"
-DBPASS="YOURMYSQLPASSWORDHERE"
+DBPASS=""
+DBHOST="localhost"
 
-# some tools
-MYSQLDUMP="`which mysqldump`"
-GZIP="`which gzip`"
-DATEBIN="`which date`"
-MKDIRBIN="`which mkdir`"
+BACKUPDIR="/u0/backups/zabbix-conf"
 
-# target path
-MAINDIR="/var/lib/zabbix/backupconf"
-DUMPDIR="${MAINDIR}/`${DATEBIN} +%Y%m%d%H%M`"
-${MKDIRBIN} -p ${DUMPDIR}
+if [ ! -x /usr/bin/mysqldump ]; then
+        echo "mysqldump not found."
+        echo "(with Debian, \"apt-get install mysql-client\" will help)"
+        exit 1
+fi
 
-# configuration tables
-CONFTABLES=( actions applications autoreg_host conditions config dchecks dhosts \
-drules dservices escalations expressions functions globalmacro graph_theme \
-graphs graphs_items groups help_items hostmacro hosts hosts_groups \
-hosts_profiles hosts_profiles_ext hosts_templates housekeeper httpstep \
-httpstepitem httptest httptestitem ids images items items_applications \
-maintenances maintenances_groups maintenances_hosts maintenances_windows \
-mappings media media_type node_cksum nodes opconditions operations \
-opmediatypes profiles proxy_autoreg_host proxy_dhistory proxy_history regexps \
-rights screens screens_items scripts service_alarms services services_links \
-services_times sessions slides slideshows sysmaps sysmaps_elements \
-sysmaps_link_triggers sysmaps_links timeperiods trigger_depends triggers \
-user_history users users_groups usrgrp valuemaps )
+SCHEMA_ONLY="alerts auditlog auditlog_details events history history_log history_str history_text history_uint trends_uint trends"
 
-# tables with large data
-DATATABLES=( acknowledges alerts auditlog_details auditlog events \
-history history_log history_str history_str_sync history_sync history_text \
-history_uint history_uint_sync trends trends_uint )
+# If backing up all DBs on the server
+TABLES="`$MYSQL --user=$DBUSER --password=$DBPASS --host=$DBHOST --batch --skip-column-names -e "show tables" $DBNAME`"
+
+# remove excluded tables
+for exclude in $SCHEMA_ONLY
+do
+        TABLES=`echo $TABLES | sed "s/\b$exclude\b//g"`
+done
+
+CONFTABLES=$TABLES
+
+DUMPFILE="${BACKUPDIR}/zbx-conf-bkup-`date +%Y%m%d-%H%M`.sql"
+>"${DUMPFILE}"
 
 # CONFTABLES
 for table in ${CONFTABLES[*]}; do
-        DUMPFILE="${DUMPDIR}/${table}.sql"
-        echo "Backuping table ${table}"
-        ${MYSQLDUMP} -R --opt --extended-insert=FALSE \
-                -h ${DBHOST} -u ${DBUSER} -p${DBPASS} ${DBNAME} --tables ${table} >${DUMPFILE}
-        ${GZIP} -f ${DUMPFILE}
+        echo "Backuping configuration table ${table}"
+        mysqldump --routines --opt --single-transaction --skip-lock-tables --extended-insert=FALSE \
+                -h ${DBHOST} -u ${DBUSER} -p${DBPASS} ${DBNAME} --tables ${table} >>"${DUMPFILE}"
 done
 
 # DATATABLES
-for table in ${DATATABLES[*]}; do
-        DUMPFILE="${DUMPDIR}/${table}.sql"
-        echo "Backuping schema table ${table}"
-        ${MYSQLDUMP} -R --opt --no-data	\
-                -h ${DBHOST} -u ${DBUSER} -p${DBPASS} ${DBNAME} --tables ${table} >${DUMPFILE}
-        ${GZIP} -f ${DUMPFILE}
+for table in ${SCHEMA_ONLY[*]}; do
+        echo "Backuping data table ${table}"
+        mysqldump --routines --opt --single-transaction --skip-lock-tables --no-data    \
+                -h ${DBHOST} -u ${DBUSER} -p${DBPASS} ${DBNAME} --tables ${table} >>"${DUMPFILE}"
 done
 
+gzip -f "${DUMPFILE}"
+
 echo
-echo "Backup Completed - ${DUMPDIR}"
+echo "Backup Completed - ${DUMPFILE}"
